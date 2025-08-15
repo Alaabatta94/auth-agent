@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Auth Orchestrator - Demo</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        input:focus {
+            border-color: #667eea;
+            outline: none;
+        }
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 10px;
+        }
+        button:hover {
+            opacity: 0.9;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+        }
+        .success {
+            background: #d4edda;
+            border-left-color: #28a745;
+        }
+        .error {
+            background: #f8d7da;
+            border-left-color: #dc3545;
+        }
+        .mfa-required {
+            background: #fff3cd;
+            border-left-color: #ffc107;
+        }
+        .hidden {
+            display: none;
+        }
+        .demo-users {
+            background: #e9ecef;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .demo-users h3 {
+            margin-top: 0;
+            color: #495057;
+        }
+        .user-card {
+            background: white;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            border-left: 3px solid #667eea;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Smart Authentication Orchestrator</h1>
+        
+        <div class="demo-users">
+            <h3>🧪 Demo Users</h3>
+            <div class="user-card">
+                <strong>Low Risk User:</strong> user@lowrisk.com / password123
+                <br><small>Expected: Simple password authentication</small>
+            </div>
+            <div class="user-card">
+                <strong>High Risk Admin:</strong> admin@highrisk.com / admin123
+                <br><small>Expected: MFA required (use code: 654321)</small>
+            </div>
+        </div>
+
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="email">Email:</label>
+                <input type="email" id="email" name="email" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="password">Password:</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+            
+            <div class="form-group hidden" id="mfaGroup">
+                <label for="mfaCode">MFA Code:</label>
+                <input type="text" id="mfaCode" name="mfaCode" placeholder="Enter 6-digit code">
+            </div>
+            
+            <button type="submit">🔐 Authenticate</button>
+        </form>
+
+        <div id="result" class="result hidden"></div>
+        
+        <div class="form-group" style="margin-top: 30px;">
+            <button onclick="testRiskAssessment()" style="background: #6c757d;">📊 Test Risk Assessment</button>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:3000';
+        let currentToken = null;
+
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const mfaCode = document.getElementById('mfaCode').value;
+            
+            try {
+                const response = await fetch(`${API_BASE}/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password, mfaCode })
+                });
+                
+                const result = await response.json();
+                displayResult(result);
+                
+                if (result.success) {
+                    currentToken = result.token;
+                    setTimeout(() => testDashboard(), 1000);
+                }
+                
+            } catch (error) {
+                displayResult({ success: false, error: 'Network error: ' + error.message });
+            }
+        });
+
+        function displayResult(result) {
+            const resultDiv = document.getElementById('result');
+            const mfaGroup = document.getElementById('mfaGroup');
+            
+            resultDiv.className = 'result';
+            resultDiv.classList.remove('hidden');
+            
+            if (result.success) {
+                resultDiv.classList.add('success');
+                resultDiv.innerHTML = `
+                    <h3>✅ Authentication Successful!</h3>
+                    <p><strong>User:</strong> ${result.user.email}</p>
+                    <p><strong>Role:</strong> ${result.user.role}</p>
+                    <p><strong>Risk Score:</strong> ${result.authInfo.riskScore}</p>
+                    <p><strong>Method:</strong> ${result.authInfo.method}</p>
+                    <p><strong>Reason:</strong> ${result.authInfo.reason}</p>
+                `;
+                mfaGroup.classList.add('hidden');
+            } else if (result.requiresMFA) {
+                resultDiv.classList.add('mfa-required');
+                resultDiv.innerHTML = `
+                    <h3>⚠️ MFA Required</h3>
+                    <p><strong>Risk Score:</strong> ${result.riskScore}</p>
+                    <p><strong>Reason:</strong> ${result.reason}</p>
+                    <p>Please enter your MFA code above.</p>
+                `;
+                mfaGroup.classList.remove('hidden');
+            } else {
+                resultDiv.classList.add('error');
+                resultDiv.innerHTML = `
+                    <h3>❌ Authentication Failed</h3>
+                    <p>${result.error}</p>
+                `;
+                mfaGroup.classList.add('hidden');
+            }
+        }
+
+        async function testDashboard() {
+            if (!currentToken) return;
+            
+            try {
+                const response = await fetch(`${API_BASE}/dashboard`, {
+                    headers: { 'Authorization': `Bearer ${currentToken}` }
+                });
+                
+                const result = await response.json();
+                console.log('Dashboard access:', result);
+                
+            } catch (error) {
+                console.error('Dashboard error:', error);
+            }
+        }
+
+        async function testRiskAssessment() {
+            const email = document.getElementById('email').value || 'user@lowrisk.com';
+            
+            try {
+                const response = await fetch(`${API_BASE}/demo/risk-assessment`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email })
+                });
+                
+                const result = await response.json();
+                
+                const resultDiv = document.getElementById('result');
+                resultDiv.className = 'result';
+                resultDiv.classList.remove('hidden');
+                resultDiv.innerHTML = `
+                    <h3>📊 Risk Assessment</h3>
+                    <p><strong>Risk Score:</strong> ${result.riskScore}/100</p>
+                    <p><strong>Auth Method:</strong> ${result.authMethod.method}</p>
+                    <p><strong>Reason:</strong> ${result.authMethod.reason}</p>
+                    <p><strong>Device:</strong> ${result.userContext.deviceType}</p>
+                    <p><strong>Browser:</strong> ${result.userContext.browser}</p>
+                `;
+                
+            } catch (error) {
+                displayResult({ success: false, error: 'Risk assessment failed: ' + error.message });
+            }
+        }
+    </script>
+</body>
+</html>

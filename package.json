@@ -1,0 +1,33 @@
+{
+  "name": "smart-auth-orchestrator",
+  "version": "1.0.0",
+  "description": "Minimal Smart Authentication Orchestrator for Hackathon",
+  "main": "dist/mastra/index.js",
+  "types": "dist/mastra/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/mastra/index.js",
+    "dev": "ts-node src/mastra/index.ts",
+    "watch": "tsc --watch"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.17",
+    "@types/jsonwebtoken": "^9.0.2",
+    "@types/bcryptjs": "^2.4.2",
+    "@types/cors": "^2.8.13",
+    "@types/node": "^20.4.5",
+    "typescript": "^5.1.6",
+    "ts-node": "^10.9.1",
+    "nodemon": "^3.0.1"
+  },
+  "keywords": ["authentication", "mastra", "hackathon"],
+  "author": "Hackathon Team",
+  "license": "MIT"
+}
