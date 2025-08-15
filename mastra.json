@@ -1,0 +1,33 @@
+{
+  "name": "smart-auth-orchestrator",
+  "version": "1.0.0",
+  "description": "Smart Authentication Orchestrator - A Mastra template for intelligent authentication",
+  "type": "custom",
+  "framework": "express",
+  "language": "typescript",
+  "entry": "src/mastra/index.ts",
+  "build": {
+    "command": "npm run build",
+    "output": "dist/"
+  },
+  "dev": {
+    "command": "npm run dev",
+    "port": 3000
+  },
+  "components": {
+    "agents": "src/mastra/agents/",
+    "tools": "src/mastra/tools/",
+    "workflows": "src/mastra/workflows/"
+  },
+  "endpoints": {
+    "health": "/health",
+    "auth": "/auth/login",
+    "verify": "/auth/verify",
+    "dashboard": "/dashboard",
+    "demo": "/demo/risk-assessment"
+  },
+  "demo": {
+    "file": "demo.html",
+    "description": "Interactive authentication demo"
+  }
+}
