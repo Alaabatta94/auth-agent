@@ -1,135 +1,95 @@
 import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { z } from 'zod';
-import { authAgent } from '../agents';
-import { authTools } from '../tools';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 
-// Input schema for authentication
-const authInputSchema = z.object({
-  email: z.string().email().describe('User email address'),
-  password: z.string().describe('User password'),
-  mfaCode: z.string().optional().describe('MFA code if required'),
-  userAgent: z.string().optional().describe('User agent string'),
-  ipAddress: z.string().optional().describe('User IP address')
-});
-
-// Output schema for authentication result
-const authOutputSchema = z.object({
-  success: z.boolean(),
-  token: z.string().optional(),
-  user: z.object({
-    email: z.string(),
-    role: z.string()
-  }).optional(),
-  authInfo: z.object({
-    riskScore: z.number(),
-    method: z.string(),
-    reason: z.string()
-  }).optional(),
-  requiresMFA: z.boolean().optional(),
-  message: z.string().optional(),
-  error: z.string().optional()
-});
-
-// Step 1: Risk Assessment
-const assessRisk = createStep({
-  id: 'assess-risk',
-  description: 'Assesses user risk based on context and credentials',
-  inputSchema: authInputSchema,
-  outputSchema: z.object({
-    riskScore: z.number(),
-    authMethod: z.object({
-      method: z.enum(['password', 'mfa']),
-      reason: z.string(),
-      requiresMFA: z.boolean()
-    }),
-    userContext: z.object({
-      email: z.string(),
-      deviceType: z.enum(['mobile', 'desktop']),
-      browser: z.string(),
-      ipCountry: z.string(),
-      isVPN: z.boolean(),
-      ipAddress: z.string()
-    })
-  }),
-  execute: async ({ inputData }) => {
-    if (!inputData) {
-      throw new Error('Input data not found');
-    }
-
-    // Extract context
-    const userContext = {
-      email: inputData.email,
-      deviceType: inputData.userAgent?.includes('Mobile') ? 'mobile' : 'desktop',
-      browser: 'chrome', // Simplified for demo
-      ipCountry: 'US', // Simplified for demo
-      isVPN: false, // Simplified for demo
-      ipAddress: inputData.ipAddress || '127.0.0.1'
-    };
-
-    // Get risk assessment from agent
-    const authDecision = await authAgent.execute({
-      inputData: {
-        userContext,
-        credentials: { 
-          email: inputData.email, 
-          password: inputData.password 
-        }
-      }
-    });
-
-    return {
-      riskScore: authDecision.outputData.riskScore,
-      authMethod: authDecision.outputData.authMethod,
-      userContext
-    };
+// Demo users for testing
+const demoUsers: Record<string, { password: string; role: string; mfaSecret: string }> = {
+  'user@lowrisk.com': {
+    password: bcrypt.hashSync('password123', 10),
+    role: 'user',
+    mfaSecret: '123456'
+  },
+  'admin@highrisk.com': {
+    password: bcrypt.hashSync('admin123', 10),
+    role: 'admin',
+    mfaSecret: '654321'
   }
-});
+};
 
-// Step 2: Authenticate User
+const secret = process.env.JWT_SECRET || 'hackathon-secret-key';
+
+// Single authentication step that does everything
 const authenticateUser = createStep({
   id: 'authenticate-user',
-  description: 'Authenticates user with password and optional MFA',
+  description: 'Authenticates user with risk assessment and optional MFA',
   inputSchema: z.object({
-    email: z.string(),
+    email: z.string().email(),
     password: z.string(),
     mfaCode: z.string().optional(),
-    riskAssessment: z.object({
-      riskScore: z.number(),
-      authMethod: z.object({
-        method: z.enum(['password', 'mfa']),
-        reason: z.string(),
-        requiresMFA: z.boolean()
-      })
-    })
+    userAgent: z.string().optional(),
+    ipAddress: z.string().optional()
   }),
-  outputSchema: authOutputSchema,
+  outputSchema: z.object({
+    success: z.boolean(),
+    token: z.string().optional(),
+    user: z.object({
+      email: z.string(),
+      role: z.string()
+    }).optional(),
+    authInfo: z.object({
+      riskScore: z.number(),
+      method: z.string(),
+      reason: z.string()
+    }).optional(),
+    requiresMFA: z.boolean().optional(),
+    message: z.string().optional(),
+    error: z.string().optional()
+  }),
   execute: async ({ inputData }) => {
     if (!inputData) {
       throw new Error('Input data not found');
     }
 
-    const { email, password, mfaCode, riskAssessment } = inputData;
+    const { email, password, mfaCode, userAgent } = inputData;
 
-    // Verify password
-    if (!authTools.verifyPassword(email, password)) {
+    // Step 1: Risk Assessment
+    let riskScore = 0;
+    if (userAgent?.includes('Mobile')) riskScore += 20;
+    if (email.includes('admin')) riskScore += 35;
+    riskScore = Math.min(riskScore, 100);
+    const requiresMFA = riskScore >= 50;
+
+    // Step 2: Password Verification
+    const user = demoUsers[email];
+    if (!user) {
+      return {
+        success: false,
+        error: 'User not found'
+      };
+    }
+
+    const isValidPassword = bcrypt.compareSync(password, user.password);
+    if (!isValidPassword) {
       return {
         success: false,
         error: 'Invalid credentials'
       };
     }
 
-    // Check if MFA is required
-    if (riskAssessment.authMethod.requiresMFA) {
+    // Step 3: MFA Check
+    if (requiresMFA) {
       if (!mfaCode) {
         return {
           success: false,
           requiresMFA: true,
           message: 'MFA code required',
-          error: riskAssessment.authMethod.reason
+          error: `High risk score: ${riskScore}`
         };
       }
-      
-      if (!authTools.verifyMFACode(email, mfaCode)) {
+
+      const isValidMFA = mfaCode === user.mfaSecret;
+      if (!isValidMFA) {
         return {
           success: false,
           error: 'Invalid MFA code'
@@ -137,64 +97,59 @@ const authenticateUser = createStep({
       }
     }
 
-    // Generate session token
-    const userRole = authTools.getUserRole(email);
-    if (!userRole) {
-      return {
-        success: false,
-        error: 'User not found'
-      };
-    }
-
-    const token = authTools.generateToken({
+    // Step 4: Generate Token
+    const token = jwt.sign({
       email,
-      role: userRole,
-      riskScore: riskAssessment.riskScore,
-      authMethod: riskAssessment.authMethod.method
-    });
+      role: user.role,
+      riskScore,
+      authMethod: requiresMFA ? 'mfa' : 'password'
+    }, secret, { expiresIn: '1h' });
 
     return {
       success: true,
       token,
       user: {
         email,
-        role: userRole
+        role: user.role
       },
       authInfo: {
-        riskScore: riskAssessment.riskScore,
-        method: riskAssessment.authMethod.method,
-        reason: riskAssessment.authMethod.reason
+        riskScore,
+        method: requiresMFA ? 'mfa' : 'password',
+        reason: requiresMFA ? `High risk score: ${riskScore}` : `Low risk score: ${riskScore}`
       }
     };
   }
 });
 
-// Create the main authentication workflow
-export const authWorkflow = createWorkflow({
+// Create the authentication workflow
+const authWorkflow = createWorkflow({
   id: 'smart-auth-orchestrator',
-  name: 'Smart Authentication Orchestrator',
-  description: 'Intelligently authenticates users based on risk assessment',
-  inputSchema: authInputSchema,
-  outputSchema: authOutputSchema,
-  steps: [assessRisk, authenticateUser],
-  execute: async ({ inputData, steps }) => {
-    if (!inputData) {
-      throw new Error('Input data not found');
-    }
+  inputSchema: z.object({
+    email: z.string().email(),
+    password: z.string(),
+    mfaCode: z.string().optional(),
+    userAgent: z.string().optional(),
+    ipAddress: z.string().optional()
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    token: z.string().optional(),
+    user: z.object({
+      email: z.string(),
+      role: z.string()
+    }).optional(),
+    authInfo: z.object({
+      riskScore: z.number(),
+      method: z.string(),
+      reason: z.string()
+    }).optional(),
+    requiresMFA: z.boolean().optional(),
+    message: z.string().optional(),
+    error: z.string().optional()
+  })
+})
+.then(authenticateUser);
 
-    // Step 1: Assess risk
-    const riskAssessment = await steps.assessRisk.execute({ inputData });
+authWorkflow.commit();
 
-    // Step 2: Authenticate user
-    const authResult = await steps.authenticateUser.execute({
-      inputData: {
-        email: inputData.email,
-        password: inputData.password,
-        mfaCode: inputData.mfaCode,
-        riskAssessment: riskAssessment.outputData
-      }
-    });
-
-    return authResult.outputData;
-  }
-});
+export { authWorkflow };
