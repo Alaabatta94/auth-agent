@@ -1,72 +1,117 @@
-// Authentication Workflow
-import { Request, Response } from 'express';
-import { AuthAgent, AuthDecision } from '../agents';
-import { AuthTools, UserData } from '../tools';
+import { createStep, createWorkflow } from '@mastra/core/workflows';
+import { z } from 'zod';
+import { authAgent } from '../agents';
+import { authTools } from '../tools';
 
-export interface AuthResult {
-  success: boolean;
-  token?: string;
-  user?: {
-    email: string;
-    role: string;
-  };
-  authInfo?: {
-    riskScore: number;
-    method: string;
-    reason: string;
-  };
-  requiresMFA?: boolean;
-  message?: string;
-  riskScore?: number;
-  reason?: string;
-  error?: string;
-}
+// Input schema for authentication
+const authInputSchema = z.object({
+  email: z.string().email().describe('User email address'),
+  password: z.string().describe('User password'),
+  mfaCode: z.string().optional().describe('MFA code if required'),
+  userAgent: z.string().optional().describe('User agent string'),
+  ipAddress: z.string().optional().describe('User IP address')
+});
 
-export interface SessionResult {
-  valid: boolean;
-  user?: UserData;
-  error?: string;
-}
+// Output schema for authentication result
+const authOutputSchema = z.object({
+  success: z.boolean(),
+  token: z.string().optional(),
+  user: z.object({
+    email: z.string(),
+    role: z.string()
+  }).optional(),
+  authInfo: z.object({
+    riskScore: z.number(),
+    method: z.string(),
+    reason: z.string()
+  }).optional(),
+  requiresMFA: z.boolean().optional(),
+  message: z.string().optional(),
+  error: z.string().optional()
+});
 
-export class AuthWorkflow {
-  private agent: AuthAgent;
-  private tools: AuthTools;
-
-  constructor() {
-    this.agent = new AuthAgent();
-    this.tools = new AuthTools();
-  }
-
-  // Main workflow execution
-  async execute(req: Request, res: Response): Promise<AuthResult> {
-    try {
-      const { email, password, mfaCode } = req.body;
-      
-      // Step 1: Extract context
-      const userContext = this.tools.extractContext(req);
-      
-      // Step 2: Agent makes authentication decision
-      const authDecision = this.agent.authenticate(userContext, { email, password });
-      
-      // Step 3: Execute authentication based on decision
-      const result = await this.executeAuthentication(authDecision, { email, password, mfaCode });
-      
-      return result;
-      
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      };
+// Step 1: Risk Assessment
+const assessRisk = createStep({
+  id: 'assess-risk',
+  description: 'Assesses user risk based on context and credentials',
+  inputSchema: authInputSchema,
+  outputSchema: z.object({
+    riskScore: z.number(),
+    authMethod: z.object({
+      method: z.enum(['password', 'mfa']),
+      reason: z.string(),
+      requiresMFA: z.boolean()
+    }),
+    userContext: z.object({
+      email: z.string(),
+      deviceType: z.enum(['mobile', 'desktop']),
+      browser: z.string(),
+      ipCountry: z.string(),
+      isVPN: z.boolean(),
+      ipAddress: z.string()
+    })
+  }),
+  execute: async ({ inputData }) => {
+    if (!inputData) {
+      throw new Error('Input data not found');
     }
-  }
 
-  // Execute the chosen authentication method
-  private async executeAuthentication(authDecision: AuthDecision, credentials: { email: string; password: string; mfaCode?: string }): Promise<AuthResult> {
-    const { email, password, mfaCode } = credentials;
-    
-    // Verify password first
-    if (!this.tools.verifyPassword(email, password)) {
+    // Extract context
+    const userContext = {
+      email: inputData.email,
+      deviceType: inputData.userAgent?.includes('Mobile') ? 'mobile' : 'desktop',
+      browser: 'chrome', // Simplified for demo
+      ipCountry: 'US', // Simplified for demo
+      isVPN: false, // Simplified for demo
+      ipAddress: inputData.ipAddress || '127.0.0.1'
+    };
+
+    // Get risk assessment from agent
+    const authDecision = await authAgent.execute({
+      inputData: {
+        userContext,
+        credentials: { 
+          email: inputData.email, 
+          password: inputData.password 
+        }
+      }
+    });
+
+    return {
+      riskScore: authDecision.outputData.riskScore,
+      authMethod: authDecision.outputData.authMethod,
+      userContext
+    };
+  }
+});
+
+// Step 2: Authenticate User
+const authenticateUser = createStep({
+  id: 'authenticate-user',
+  description: 'Authenticates user with password and optional MFA',
+  inputSchema: z.object({
+    email: z.string(),
+    password: z.string(),
+    mfaCode: z.string().optional(),
+    riskAssessment: z.object({
+      riskScore: z.number(),
+      authMethod: z.object({
+        method: z.enum(['password', 'mfa']),
+        reason: z.string(),
+        requiresMFA: z.boolean()
+      })
+    })
+  }),
+  outputSchema: authOutputSchema,
+  execute: async ({ inputData }) => {
+    if (!inputData) {
+      throw new Error('Input data not found');
+    }
+
+    const { email, password, mfaCode, riskAssessment } = inputData;
+
+    // Verify password
+    if (!authTools.verifyPassword(email, password)) {
       return {
         success: false,
         error: 'Invalid credentials'
@@ -74,18 +119,17 @@ export class AuthWorkflow {
     }
 
     // Check if MFA is required
-    if (authDecision.authMethod.requiresMFA) {
+    if (riskAssessment.authMethod.requiresMFA) {
       if (!mfaCode) {
         return {
           success: false,
           requiresMFA: true,
           message: 'MFA code required',
-          riskScore: authDecision.riskScore,
-          reason: authDecision.authMethod.reason
+          error: riskAssessment.authMethod.reason
         };
       }
       
-      if (!this.tools.verifyMFACode(email, mfaCode)) {
+      if (!authTools.verifyMFACode(email, mfaCode)) {
         return {
           success: false,
           error: 'Invalid MFA code'
@@ -94,7 +138,7 @@ export class AuthWorkflow {
     }
 
     // Generate session token
-    const userRole = this.tools.getUserRole(email);
+    const userRole = authTools.getUserRole(email);
     if (!userRole) {
       return {
         success: false,
@@ -102,11 +146,11 @@ export class AuthWorkflow {
       };
     }
 
-    const token = this.tools.generateToken({
+    const token = authTools.generateToken({
       email,
       role: userRole,
-      riskScore: authDecision.riskScore,
-      authMethod: authDecision.authMethod.method
+      riskScore: riskAssessment.riskScore,
+      authMethod: riskAssessment.authMethod.method
     });
 
     return {
@@ -117,32 +161,40 @@ export class AuthWorkflow {
         role: userRole
       },
       authInfo: {
-        riskScore: authDecision.riskScore,
-        method: authDecision.authMethod.method,
-        reason: authDecision.authMethod.reason
+        riskScore: riskAssessment.riskScore,
+        method: riskAssessment.authMethod.method,
+        reason: riskAssessment.authMethod.reason
       }
     };
   }
+});
 
-  // Verify session token
-  verifySession(token: string): SessionResult {
-    const decoded = this.tools.verifyToken(token);
-    if (!decoded) {
-      return { valid: false, error: 'Invalid token' };
+// Create the main authentication workflow
+export const authWorkflow = createWorkflow({
+  id: 'smart-auth-orchestrator',
+  name: 'Smart Authentication Orchestrator',
+  description: 'Intelligently authenticates users based on risk assessment',
+  inputSchema: authInputSchema,
+  outputSchema: authOutputSchema,
+  steps: [assessRisk, authenticateUser],
+  execute: async ({ inputData, steps }) => {
+    if (!inputData) {
+      throw new Error('Input data not found');
     }
-    return { valid: true, user: decoded };
-  }
 
-  // Get agent for external access
-  getAgent(): AuthAgent {
-    return this.agent;
-  }
+    // Step 1: Assess risk
+    const riskAssessment = await steps.assessRisk.execute({ inputData });
 
-  // Get tools for external access
-  getTools(): AuthTools {
-    return this.tools;
-  }
-}
+    // Step 2: Authenticate user
+    const authResult = await steps.authenticateUser.execute({
+      inputData: {
+        email: inputData.email,
+        password: inputData.password,
+        mfaCode: inputData.mfaCode,
+        riskAssessment: riskAssessment.outputData
+      }
+    });
 
-// Export an instance for Mastra
-export const authWorkflow = new AuthWorkflow();
+    return authResult.outputData;
+  }
+});

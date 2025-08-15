@@ -4,14 +4,6 @@ import { authWorkflow } from './workflows';
 import { authAgent } from './agents';
 import { authTools } from './tools';
 
-// Export all components for external use
-export { AuthAgent } from './agents';
-export { AuthTools } from './tools';
-export { AuthWorkflow } from './workflows';
-export type { UserContext, AuthMethod, AuthDecision } from './agents';
-export type { User, UserData } from './tools';
-export type { AuthResult, SessionResult } from './workflows';
-
 // Create Mastra instance
 export const mastra = new Mastra({
   workflows: { authWorkflow },
