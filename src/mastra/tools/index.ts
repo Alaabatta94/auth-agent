@@ -105,3 +105,6 @@ export class AuthTools {
     return user ? user.role : null;
   }
 }
+
+// Export an instance for Mastra
+export const authTools = new AuthTools();

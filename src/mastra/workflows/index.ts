@@ -143,3 +143,6 @@ export class AuthWorkflow {
     return this.tools;
   }
 }
+
+// Export an instance for Mastra
+export const authWorkflow = new AuthWorkflow();

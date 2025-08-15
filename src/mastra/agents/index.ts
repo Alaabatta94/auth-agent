@@ -72,3 +72,6 @@ export class AuthAgent {
     };
   }
 }
+
+// Export an instance for Mastra
+export const authAgent = new AuthAgent();
